@@ -12,8 +12,11 @@ using namespace std;
 enum TokenType { Delimiter, Reserved, Identifier, Integer, Real, End };
 struct Token { TokenType type; string lexeme; int index; };
 
-unordered_set<string> delimiters;
-unordered_set<string> reservedWords;
+// store delimiters/reserved words with index for table lookup
+unordered_map<string,int> delimiterIndex;
+vector<string> delimiterList;
+unordered_map<string,int> reservedIndex;
+vector<string> reservedList;
 vector<string> integerTable;
 vector<string> realTable;
 vector<string> identifierTable;
@@ -26,18 +29,25 @@ static string toUpper(const string &s) {
 }
 
 static void loadDelimiters(const string &file) {
-    ifstream in(file); string s;
+    ifstream in(file); string s; int idx = 1;
     while (getline(in, s)) {
         if (!s.empty() && s.back()=='\r') s.pop_back();
-        if (!s.empty()) delimiters.insert(s);
+        if (!s.empty()) {
+            delimiterList.push_back(s);
+            delimiterIndex[s] = idx++;
+        }
     }
 }
 
 static void loadReserved(const string &file) {
-    ifstream in(file); string s;
+    ifstream in(file); string s; int idx = 1;
     while (getline(in, s)) {
         if (!s.empty() && s.back()=='\r') s.pop_back();
-        if (!s.empty()) reservedWords.insert(toUpper(s));
+        if (!s.empty()) {
+            string up = toUpper(s);
+            reservedList.push_back(up);
+            reservedIndex[up] = idx++;
+        }
     }
 }
 
@@ -68,7 +78,7 @@ static void tokenize(const string &inputFile) {
         while (i < line.size()) {
             char c = line[i];
             if (isspace(static_cast<unsigned char>(c))) { ++i; continue; }
-            if (delimiters.count(string(1,c))) {
+            if (delimiterIndex.count(string(1,c))) {
                 lineTokens.push_back({Delimiter,string(1,c),-1});
                 ++i; continue;
             }
@@ -77,7 +87,7 @@ static void tokenize(const string &inputFile) {
                 while (i<line.size() && (isalnum(static_cast<unsigned char>(line[i]))||line[i]=='_'))
                     word += line[i++];
                 string upper = toUpper(word);
-                if (reservedWords.count(upper))
+                if (reservedIndex.count(upper))
                     lineTokens.push_back({Reserved,upper,-1});
                 else {
                     int idx = addIdentifier(word);
@@ -111,20 +121,47 @@ static void addVariable(const string &name,const string &type){ symbolTable[name
 static void addArray(const string &name,const string &type,int size){ symbolTable[name]={type,true,size}; }
 
 // ----- IR builder -----
-struct Quadruple { string op,arg1,arg2,result; };
+struct Ref { int table=0,index=0; };
+struct Quadruple { Ref op,arg1,arg2,result; string comment; };
 vector<Quadruple> quads;
 int tempCount=0;
 int labelCount=0;
 
 static string newTemp(){ return "T" + to_string(++tempCount); }
-static string newLabel(){ return "L" + to_string(++labelCount); }
-static void addQuad(const string& op,const string& a1,const string& a2,const string& res){
-    quads.push_back({op,a1,a2,res});
+static string newLabel(){ string lbl="L" + to_string(++labelCount); addIdentifier(lbl); return lbl; }
+
+static bool isIntegerStr(const string &s){ return !s.empty() && all_of(s.begin(),s.end(),::isdigit); }
+static bool isRealStr(const string &s){ return s.find('.')!=string::npos && all_of(s.begin(),s.end(),[](char c){return isdigit(c) || c=='.';}); }
+
+static Ref toRef(const string &lex){
+    if (lex.empty()) return {0,0};
+    if (delimiterIndex.count(lex)) return {1, delimiterIndex[lex]};
+    string up = toUpper(lex);
+    if (reservedIndex.count(up)) return {2, reservedIndex[up]};
+    if (lex[0]=='T' && isIntegerStr(lex.substr(1))) return {0, stoi(lex.substr(1))};
+    if (isIntegerStr(lex)) return {3, addInteger(lex)};
+    if (isRealStr(lex)) return {4, addReal(lex)};
+    int idx = addIdentifier(lex);
+    return {5, idx};
 }
+
+static void addQuad(const string& op,const string& a1,const string& a2,const string& res,const string& comment){
+    quads.push_back({toRef(op),toRef(a1),toRef(a2),toRef(res),comment});
+}
+
+static string refToStr(const Ref &r){
+    if (r.table==0 && r.index==0) return "";
+    return "("+to_string(r.table)+", "+to_string(r.index)+")";
+}
+
 static void writeQuadTable(const string& file){
     ofstream out(file); int idx=1;
-    for (auto &q:quads)
-        out << idx++ << " ("<<q.op<<", "<<q.arg1<<", "<<q.arg2<<", "<<q.result<<")\n";
+    for (auto &q:quads){
+        out << idx++ << " ("<<refToStr(q.op)<<", "
+            << refToStr(q.arg1)<<", "
+            << refToStr(q.arg2)<<", "
+            << refToStr(q.result)<<") "<<q.comment<<"\n";
+    }
 }
 
 // ----- Parser helpers -----
@@ -134,7 +171,9 @@ static string parseExpression(const vector<Token>& line,size_t &i){
     string left = tokenValue(line[i]); ++i;
     if (i<line.size() && line[i].lexeme=="+"){
         ++i; string right=tokenValue(line[i]); ++i;
-        string temp=newTemp(); addQuad("ADD",left,right,temp); return temp;
+        string temp=newTemp();
+        addQuad("+",left,right,temp,temp+"="+left+"+"+right);
+        return temp;
     }
     return left;
 }
@@ -144,11 +183,11 @@ static void parseAssignment(const vector<Token>& line,size_t i){
         string arrayName=line[i].lexeme;
         string index=line[i+2].lexeme;
         size_t pos=i+5; string value=parseExpression(line,pos);
-        addQuad("STORE",value,index,arrayName);
+        addQuad("=",value,index,arrayName,arrayName+"("+index+")="+value);
     } else {
         string lhs=line[i].lexeme; size_t pos=i+2;
         string value=parseExpression(line,pos);
-        addQuad("ASSIGN",value,"",lhs);
+        addQuad("=",value,"",lhs,lhs+"="+value);
     }
 }
 
@@ -176,7 +215,7 @@ static void parseDimension(const vector<Token>& line,size_t i){
 
 static void parseGoto(const vector<Token>& line,size_t i){
     if (i<line.size() && line[i].type==Identifier)
-        addQuad("GOTO","","",line[i].lexeme);
+        addQuad("GTO","","",line[i].lexeme,"GTO "+line[i].lexeme);
 }
 
 static void parseIf(const vector<Token>& line,size_t i){
@@ -184,15 +223,15 @@ static void parseIf(const vector<Token>& line,size_t i){
     string relop=line[i+1].lexeme;
     string right=tokenValue(line[i+2]);
     string tempCond=newTemp();
-    addQuad(relop,left,right,tempCond);
+    addQuad(relop,left,right,tempCond,tempCond+"="+left+" "+relop+" "+right);
     size_t pos=i+3;
     if (pos<line.size() && line[pos].lexeme=="THEN") ++pos;
     if (pos<line.size() && line[pos].lexeme=="GTO"){
         string trueLabel=line[pos+1].lexeme;
         string elseLabel=newLabel();
-        addQuad("IF_FALSE",tempCond,"",elseLabel);
-        addQuad("GOTO","","",trueLabel);
-        addQuad("LABEL","","",elseLabel);
+        addQuad("IF",tempCond,"",elseLabel,"IF "+tempCond+" == FALSE GO TO "+elseLabel);
+        addQuad("GTO","","",trueLabel,"GTO "+trueLabel);
+        addQuad("LABEL","","",elseLabel,elseLabel);
         pos+=2;
         if (pos<line.size() && line[pos].lexeme=="ELSE") ++pos;
         if (pos<line.size() && line[pos].type==Identifier)
@@ -205,7 +244,7 @@ static void parseProgram(){
         if (line.empty()) continue;
         size_t i=0;
         if (line[i].type==Identifier && line.size()>1 && line[1].type==Reserved){
-            addQuad("LABEL","","",line[i].lexeme);
+            addQuad("LABEL","","",line[i].lexeme,line[i].lexeme);
             ++i;
         }
         if (i>=line.size()) continue;
@@ -216,21 +255,25 @@ static void parseProgram(){
             else if (word=="DIMENSION") parseDimension(line,i+1);
             else if (word=="IF") parseIf(line,i+1);
             else if (word=="GTO") parseGoto(line,i+1);
-            else if (word=="ENP") addQuad("ENP","","","");
+            else if (word=="ENP") addQuad("ENP","","","","ENP");
         } else if (tok.type==Identifier) {
             parseAssignment(line,i);
         }
     }
 }
 
-int main(){
+int main(int argc, char* argv[]){
     loadDelimiters("table1.table");
     loadReserved("table2.table");
     string filename;
-    cout << "Enter source filename: ";
-    if (!(cin >> filename)) {
-        cerr << "No input file provided." << endl;
-        return 1;
+    if (argc > 1) {
+        filename = argv[1];
+    } else {
+        cout << "Enter source filename: ";
+        if (!(cin >> filename)) {
+            cerr << "No input file provided." << endl;
+            return 1;
+        }
     }
     tokenize(filename);
     parseProgram();
