@@ -329,56 +329,62 @@ void writeQuadTable(const string& file) {
 }
 
 // ----- Parser helpers -----
- string tokenValue(const Token &t) {
-     return t.lexeme;
+string tokenValue(const Token &t) {
+    return t.lexeme;
 }
 
+struct ExprResult {
+    string name;
+    string type; // "INTEGER" or "REAL"
+};
 
-string parseExpression(const vector<Token>& line,int &i);
-string parseArrayRef(const vector<Token>& line,int &i);
-string parseFactor(const vector<Token>& line,int &i);
-string parseTerm(const vector<Token>& line,int &i);
+ExprResult parseExpression(const vector<Token>& line,int &i);
+ExprResult parseArrayRef(const vector<Token>& line,int &i);
+ExprResult parseFactor(const vector<Token>& line,int &i);
+ExprResult parseTerm(const vector<Token>& line,int &i);
 
 // Parse expressions with + and - operators
-string parseExpression(const vector<Token>& line,int &i) {
-    string left = parseTerm(line,i);
+ExprResult parseExpression(const vector<Token>& line,int &i) {
+    ExprResult left = parseTerm(line,i);
     while (i<line.size() && (line[i].lexeme=="+" || line[i].lexeme=="-")) {
         string op = line[i].lexeme;
         ++i;
-        string right = parseTerm(line,i);
+        ExprResult right = parseTerm(line,i);
         string temp = newTemp();
-        addQuad(op,left,right,temp,temp+"="+left+op+right);
-        left = temp;
+        addQuad(op,left.name,right.name,temp,temp+"="+left.name+op+right.name);
+        string type = (left.type=="REAL" || right.type=="REAL") ? "REAL" : "INTEGER";
+        left = {temp, type};
     }
     return left;
 }
 
 // Parse terms with * and / operators
-string parseTerm(const vector<Token>& line,int &i) {
-    string left = parseFactor(line,i);
+ExprResult parseTerm(const vector<Token>& line,int &i) {
+    ExprResult left = parseFactor(line,i);
     while (i<line.size() && (line[i].lexeme=="*" || line[i].lexeme=="/")) {
         string op = line[i].lexeme;
         ++i;
-        string right = parseFactor(line,i);
+        ExprResult right = parseFactor(line,i);
         string temp = newTemp();
-        addQuad(op,left,right,temp,temp+"="+left+op+right);
-        left = temp;
+        addQuad(op,left.name,right.name,temp,temp+"="+left.name+op+right.name);
+        string type = (op=="/" || left.type=="REAL" || right.type=="REAL") ? "REAL" : "INTEGER";
+        left = {temp, type};
     }
     return left;
 }
 
 // Parse array references like A(I) or B(I,J)
-string parseArrayRef(const vector<Token>& line,int &i) {
+ExprResult parseArrayRef(const vector<Token>& line,int &i) {
     string base = line[i].lexeme; // array name
     ++i; // move past identifier
     if (i>=line.size() || line[i].lexeme!="(") {
         reportSyntaxError("Expected '(' after array name");
-        return base;
+        return {base, "INTEGER"};
     }
     ++i; // consume '('
-    vector<string> indices;
+    vector<ExprResult> indices;
     while (i<line.size() && line[i].lexeme!=")") {
-        string idx = parseExpression(line,i);
+        ExprResult idx = parseExpression(line,i);
         indices.push_back(idx);
         if (i<line.size() && line[i].lexeme==",") ++i; else break;
     }
@@ -387,23 +393,25 @@ string parseArrayRef(const vector<Token>& line,int &i) {
     } else {
         ++i; // consume ')'
     }
+    SymbolInfo info; string elemType="INTEGER";
+    if (lookupSymbol(base, info)) elemType = info.type;
     string tempBase = base;
     for (const auto &idx : indices) {
         string tmp = newTemp();
-        addQuad("[]",tempBase,idx,tmp,tmp+"="+tempBase+"("+idx+")");
+        addQuad("[]",tempBase,idx.name,tmp,tmp+"="+tempBase+"("+idx.name+")");
         tempBase = tmp;
     }
-    return tempBase;
+    return {tempBase, elemType};
 }
 
 // Parse factors and handle exponentiation
-string parseFactor(const vector<Token>& line,int &i) {
+ExprResult parseFactor(const vector<Token>& line,int &i) {
     if (i>=line.size()) {
         reportSyntaxError("Unexpected end of expression");
-        return "";
+        return {"", "INTEGER"};
     }
 
-    string left;
+    ExprResult left;
 
     // Handle parenthesized subexpressions
     if (line[i].type==Identifier && i+1<line.size() && line[i+1].lexeme=="(") {
@@ -418,7 +426,13 @@ string parseFactor(const vector<Token>& line,int &i) {
             ++i; // consume ')'
         }
     } else {
-        left = tokenValue(line[i]);
+        left.name = tokenValue(line[i]);
+        if (line[i].type==Real) left.type="REAL";
+        else if (line[i].type==Integer) left.type="INTEGER";
+        else if (line[i].type==Identifier) {
+            SymbolInfo info;
+            left.type = lookupSymbol(line[i].lexeme, info) ? info.type : "INTEGER";
+        } else left.type = "INTEGER";
         ++i;
     }
 
@@ -429,10 +443,11 @@ string parseFactor(const vector<Token>& line,int &i) {
             reportSyntaxError("Missing right operand for '^'");
             return left;
         }
-        string right = parseFactor(line,i);
+        ExprResult right = parseFactor(line,i);
         string temp = newTemp();
-        addQuad("^",left,right,temp,temp+"="+left+"^"+right);
-        return temp;
+        addQuad("^",left.name,right.name,temp,temp+"="+left.name+"^"+right.name);
+        string type = (left.type=="REAL" || right.type=="REAL") ? "REAL" : "INTEGER";
+        return {temp, type};
     }
     return left;
 }
@@ -441,7 +456,7 @@ void parseAssignment(const vector<Token>& line, int i) {
     if (i+1<line.size() && line[i+1].lexeme=="(") {
         string arrayName=line[i].lexeme;
         int pos=i+2;
-        string index=parseExpression(line,pos);
+        ExprResult index=parseExpression(line,pos);
         if (pos>=line.size() || line[pos].lexeme!=")") {
             reportSyntaxError("Missing ')' in array assignment");
             return;
@@ -452,8 +467,16 @@ void parseAssignment(const vector<Token>& line, int i) {
             return;
         }
         ++pos;
-        string value=parseExpression(line,pos);
-        addQuad("=",value,index,arrayName,arrayName+"("+index+")="+value);
+        ExprResult value=parseExpression(line,pos);
+        SymbolInfo info; string elemType="INTEGER";
+        if (lookupSymbol(arrayName, info)) elemType = info.type;
+        string rhs = value.name;
+        if (elemType=="INTEGER" && value.type=="REAL") {
+            string tmp = newTemp();
+            addQuad("INT", value.name, "", tmp, tmp+"=INT("+value.name+")");
+            rhs = tmp;
+        }
+        addQuad("=",rhs,index.name,arrayName,arrayName+"("+index.name+")="+rhs);
     } else {
         if (i+1>=line.size() || line[i+1].lexeme!="=") {
             reportSyntaxError("Expected '=' in assignment");
@@ -461,8 +484,16 @@ void parseAssignment(const vector<Token>& line, int i) {
         }
         string lhs=line[i].lexeme;
         int pos=i+2;
-        string value=parseExpression(line,pos);
-        addQuad("=",value,"",lhs,lhs+"="+value);
+        ExprResult value=parseExpression(line,pos);
+        SymbolInfo info; string lhsType="INTEGER";
+        if (lookupSymbol(lhs, info)) lhsType = info.type;
+        string rhs = value.name;
+        if (lhsType=="INTEGER" && value.type=="REAL") {
+            string tmp = newTemp();
+            addQuad("INT", value.name, "", tmp, tmp+"=INT("+value.name+")");
+            rhs = tmp;
+        }
+        addQuad("=",rhs,"",lhs,lhs+"="+rhs);
     }
 }
 
@@ -604,8 +635,8 @@ void parseCall(const vector<Token>& line,int i){
     if (i<line.size() && line[i].lexeme=="(") {
         ++i; // consume '('
         while (i<line.size() && line[i].lexeme!=")") {
-            string arg=parseExpression(line,i);
-            addQuad("ARG","","",arg,"ARG "+arg);
+            ExprResult arg=parseExpression(line,i);
+            addQuad("ARG","","",arg.name,"ARG "+arg.name);
             ++paramCount;
             if (i<line.size() && line[i].lexeme==",") ++i; else break;
         }
