@@ -197,14 +197,45 @@ bool tokenize(const string &inputFile) {
 }
 
 // ----- Semantic info -----
-struct SymbolInfo { string type; bool isArray=false; int arraySize=0; };
-unordered_map<string,SymbolInfo> symbolTable;
+struct SymbolInfo {
+    string type;
+    bool isArray = false;
+    vector<int> dimensions; // store sizes for each dimension
+};
 
- void addVariable(const string &name, const string &type) {
-     symbolTable[name].type = type;
+// ----- Symbol table with scope -----
+vector<unordered_map<string,SymbolInfo>> symbolTables(1); // global scope at index 0
+
+unordered_map<string,SymbolInfo>& currentTable() {
+    return symbolTables.back();
 }
- void addArray(const string &name, const string &type, int size) {
-     symbolTable[name] = {type, true, size};
+
+void pushScope() {
+    symbolTables.push_back({});
+}
+
+void popScope() {
+    if (symbolTables.size() > 1)
+        symbolTables.pop_back();
+}
+
+void addVariable(const string &name, const string &type) {
+    currentTable()[name].type = type;
+}
+
+void addArray(const string &name, const string &type, const vector<int>& dims) {
+    currentTable()[name] = {type, true, dims};
+}
+
+bool lookupSymbol(const string &name, SymbolInfo &info) {
+    for (int s = (int)symbolTables.size() - 1; s >= 0; --s) {
+        auto it = symbolTables[s].find(name);
+        if (it != symbolTables[s].end()) {
+            info = it->second;
+            return true;
+        }
+    }
+    return false;
 }
 
 // ----- IR builder -----
@@ -303,6 +334,8 @@ void writeQuadTable(const string& file) {
 }
 
 
+string parseExpression(const vector<Token>& line,int &i);
+string parseArrayRef(const vector<Token>& line,int &i);
 string parseFactor(const vector<Token>& line,int &i);
 string parseTerm(const vector<Token>& line,int &i);
 
@@ -334,6 +367,35 @@ string parseTerm(const vector<Token>& line,int &i) {
     return left;
 }
 
+// Parse array references like A(I) or B(I,J)
+string parseArrayRef(const vector<Token>& line,int &i) {
+    string base = line[i].lexeme; // array name
+    ++i; // move past identifier
+    if (i>=line.size() || line[i].lexeme!="(") {
+        reportSyntaxError("Expected '(' after array name");
+        return base;
+    }
+    ++i; // consume '('
+    vector<string> indices;
+    while (i<line.size() && line[i].lexeme!=")") {
+        string idx = parseExpression(line,i);
+        indices.push_back(idx);
+        if (i<line.size() && line[i].lexeme==",") ++i; else break;
+    }
+    if (i>=line.size() || line[i].lexeme!=")") {
+        reportSyntaxError("Missing ')' in array reference");
+    } else {
+        ++i; // consume ')'
+    }
+    string tempBase = base;
+    for (const auto &idx : indices) {
+        string tmp = newTemp();
+        addQuad("[]",tempBase,idx,tmp,tmp+"="+tempBase+"("+idx+")");
+        tempBase = tmp;
+    }
+    return tempBase;
+}
+
 // Parse factors and handle exponentiation
 string parseFactor(const vector<Token>& line,int &i) {
     if (i>=line.size()) {
@@ -344,7 +406,10 @@ string parseFactor(const vector<Token>& line,int &i) {
     string left;
 
     // Handle parenthesized subexpressions
-    if (line[i].lexeme == "(") {
+    if (line[i].type==Identifier && i+1<line.size() && line[i+1].lexeme=="(") {
+        left = parseArrayRef(line,i);
+    }
+    else if (line[i].lexeme == "(") {
         ++i; // consume '('
         left = parseExpression(line,i);
         if (i>=line.size() || line[i].lexeme != ")") {
@@ -374,25 +439,22 @@ string parseFactor(const vector<Token>& line,int &i) {
 
 void parseAssignment(const vector<Token>& line, int i) {
     if (i+1<line.size() && line[i+1].lexeme=="(") {
-        if (i+2>=line.size() || line[i+2].type!=Identifier) {
-            reportSyntaxError("Expected index after '(' in array assignment");
-            return;
-        }
         string arrayName=line[i].lexeme;
-        string index=line[i+2].lexeme;
-        if (i+3>=line.size() || line[i+3].lexeme!=")") {
+        int pos=i+2;
+        string index=parseExpression(line,pos);
+        if (pos>=line.size() || line[pos].lexeme!=")") {
             reportSyntaxError("Missing ')' in array assignment");
             return;
         }
-        if (i+4>=line.size() || line[i+4].lexeme!="=") {
+        ++pos;
+        if (pos>=line.size() || line[pos].lexeme!="=") {
             reportSyntaxError("Expected '=' in array assignment");
             return;
         }
-        int pos=i+5;
+        ++pos;
         string value=parseExpression(line,pos);
         addQuad("=",value,index,arrayName,arrayName+"("+index+")="+value);
-    }
-    else {
+    } else {
         if (i+1>=line.size() || line[i+1].lexeme!="=") {
             reportSyntaxError("Expected '=' in assignment");
             return;
@@ -443,44 +505,84 @@ void parseProgramStart(const vector<Token>& line,int i){
 }
 
 void parseSubroutine(const vector<Token>& line,int i){
-    if (i<line.size() && line[i].type==Identifier){
-        addQuad("SUBROUTINE","","",line[i].lexeme,"SUBROUTINE "+line[i].lexeme);
-    } else {
+    if (i>=line.size() || line[i].type!=Identifier) {
         reportSyntaxError("SUBROUTINE missing name");
+        return;
+    }
+    string name=line[i].lexeme;
+    addQuad("SUBROUTINE","","",name,"SUBROUTINE "+name);
+    pushScope();
+    ++i;
+    if (i<line.size() && line[i].lexeme=="(") {
+        ++i;
+        while (i<line.size() && line[i].lexeme!=")") {
+            if (i>=line.size() || line[i].type!=Reserved) {
+                reportSyntaxError("Expected type in parameter list");
+                break;
+            }
+            string type=line[i].lexeme; ++i;
+            if (i>=line.size() || line[i].lexeme != ":") {
+                reportSyntaxError("Expected ':' in parameter list");
+                break;
+            }
+            ++i;
+            while (i<line.size() && line[i].type==Identifier) {
+                string param=line[i].lexeme;
+                addVariable(param,type);
+                if (variableSet.insert(param).second) variableList.push_back(param);
+                addQuad("PARAM","","",param,"PARAM "+param);
+                ++i;
+                if (i<line.size() && line[i].lexeme==",") { ++i; continue; }
+                else break;
+            }
+            if (i<line.size() && line[i].lexeme==";") { ++i; continue; }
+            else break;
+        }
+        if (i>=line.size() || line[i].lexeme!=")")
+            reportSyntaxError("Missing ')' in parameter list");
+        else
+            ++i;
     }
 }
 
 void parseDimension(const vector<Token>& line,int i){
-    if (i<line.size() && line[i].type==Reserved){
-        string type=line[i].lexeme;
-        if (i+1>=line.size() || line[i+1].lexeme != ":") {
-            reportSyntaxError("Expected ':' after type in DIMENSION");
-            return;
-        }
-        i+=2;
-        if (i>=line.size() || line[i].type!=Identifier){
+    if (i>=line.size() || line[i].type!=Reserved){
+        reportSyntaxError("DIMENSION missing type");
+        return;
+    }
+    string type=line[i].lexeme;
+    if (i+1>=line.size() || line[i+1].lexeme != ":") {
+        reportSyntaxError("Expected ':' after type in DIMENSION");
+        return;
+    }
+    i+=2; // move past type and ':'
+    while (i<line.size()) {
+        if (line[i].type!=Identifier) {
             reportSyntaxError("Expected array name in DIMENSION");
             return;
         }
-        string name=line[i].lexeme; i++;
+        string name=line[i].lexeme; ++i;
         if (i>=line.size() || line[i].lexeme!="(") {
             reportSyntaxError("Expected '(' after array name in DIMENSION");
             return;
         }
-        i++;
-        if (i>=line.size() || line[i].type!=Integer){
-            reportSyntaxError("Expected size in DIMENSION");
-            return;
+        ++i; // consume '('
+        vector<int> dims;
+        while (i<line.size() && line[i].type==Integer) {
+            dims.push_back(stoi(line[i].lexeme));
+            ++i;
+            if (i<line.size() && line[i].lexeme==",") ++i;
+            else break;
         }
-        int size=stoi(line[i].lexeme); i++;
         if (i>=line.size() || line[i].lexeme!=")") {
             reportSyntaxError("Expected ')' after size in DIMENSION");
             return;
         }
+        ++i; // consume ')'
         if (variableSet.insert(name).second) variableList.push_back(name);
-        addArray(name,type,size);
-    } else {
-        reportSyntaxError("DIMENSION missing type");
+        addArray(name,type,dims);
+        if (i<line.size() && line[i].lexeme==",") { ++i; continue; }
+        else break;
     }
 }
 
@@ -492,12 +594,28 @@ void parseGoto(const vector<Token>& line,int i){
 }
 
 void parseCall(const vector<Token>& line,int i){
-    if (i<line.size() && line[i].type==Identifier){
-        addQuad("CALL","","",line[i].lexeme,"CALL "+line[i].lexeme);
-        // Parameters are ignored for IR simplification
-    } else {
+    if (i>=line.size() || line[i].type!=Identifier){
         reportSyntaxError("CALL missing subroutine name");
+        return;
     }
+    string name=line[i].lexeme;
+    ++i;
+    int paramCount=0;
+    if (i<line.size() && line[i].lexeme=="(") {
+        ++i; // consume '('
+        while (i<line.size() && line[i].lexeme!=")") {
+            string arg=parseExpression(line,i);
+            addQuad("ARG","","",arg,"ARG "+arg);
+            ++paramCount;
+            if (i<line.size() && line[i].lexeme==",") ++i; else break;
+        }
+        if (i>=line.size() || line[i].lexeme!=")") {
+            reportSyntaxError("Missing ')' in CALL");
+        } else {
+            ++i;
+        }
+    }
+    addQuad("CALL",to_string(paramCount),"",name,"CALL "+name);
 }
 
 void parseIO(const string& op,const vector<Token>& line,int i){
@@ -545,7 +663,7 @@ void parseStatement(const vector<Token>& line){
         else if (word=="CALL") parseCall(line,1);
         else if (word=="INPUT") parseIO("INPUT",line,1);
         else if (word=="OUTPUT") parseIO("OUTPUT",line,1);
-        else if (word=="ENS") addQuad("ENS","","","","ENS");
+        else if (word=="ENS") { addQuad("ENS","","","","ENS"); popScope(); }
         else if (word=="ENP") addQuad("ENP","","","","ENP");
         else reportSyntaxError("Unknown reserved word '"+word+"'");
     }
