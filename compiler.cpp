@@ -34,8 +34,12 @@ string toUpper(const string &str) {
     return lower;
 }
 
-void loadDelimiters(const string &file) {
+bool loadDelimiters(const string &file) {
     ifstream in(file);
+    if (!in) {
+        cerr << "Error: could not open " << file << endl;
+        return false;
+    }
     string s; int idx = 1;
     while (getline(in, s)) {
         if (!s.empty() && s.back()=='\r') s.pop_back();
@@ -44,10 +48,15 @@ void loadDelimiters(const string &file) {
             delimiterIndex[s] = idx++;
         }
     }
+    return true;
 }
 
-void loadReserved(const string &file) {
+bool loadReserved(const string &file) {
     ifstream in(file);
+    if (!in) {
+        cerr << "Error: could not open " << file << endl;
+        return false;
+    }
     string s;
     int idx = 1;
     while (getline(in, s)) {
@@ -58,6 +67,7 @@ void loadReserved(const string &file) {
             reservedIndex[up] = idx++;
         }
     }
+    return true;
 }
 
 // compute sum of ASCII codes and map into table via modulo 100
@@ -113,8 +123,10 @@ int addIdentifier(const string &s) {
     return idx;
 }
 
-void tokenize(const string &inputFile) {
+bool tokenize(const string &inputFile) {
     ifstream in(inputFile);
+    if (!in) return false;
+    tokens.clear();
     string line;
     while (getline(in, line)) {
         if (!line.empty() && line.back()=='\r') line.pop_back();
@@ -163,6 +175,7 @@ void tokenize(const string &inputFile) {
         }
         tokens.push_back(lineTokens);
     }
+    return true;
 }
 
 // ----- Semantic info -----
@@ -377,13 +390,16 @@ void parseIf(const vector<Token>& line,int i){
     string endLabel=newLabel();
     addQuad("IF",tempCond,"",falseLabel,"IF "+tempCond+" == FALSE GO TO "+falseLabel);
     vector<Token> thenPart(line.begin()+pos,line.begin()+elsePos);
+    bool thenIsGoto = !thenPart.empty() && thenPart[0].lexeme == "GTO";
     parseStatement(thenPart);
     if (elsePos<line.size()){
-        addQuad("GTO","","",endLabel,"GTO "+endLabel);
+        if (!thenIsGoto)
+            addQuad("GTO","","",endLabel,"GTO "+endLabel);
         addQuad("LABEL","","",falseLabel,falseLabel);
         vector<Token> elsePart(line.begin()+elsePos+1,line.end());
         parseStatement(elsePart);
-        addQuad("LABEL","","",endLabel,endLabel);
+        if (!thenIsGoto)
+            addQuad("LABEL","","",endLabel,endLabel);
     }
     else {
         addQuad("LABEL","","",falseLabel,falseLabel);
@@ -416,21 +432,20 @@ void parseProgram() {
     }
 }
 
-int main(int argc, char* argv[]){
-    loadDelimiters("table1.table");
-    loadReserved("table2.table");
-    string filename;
-    if (argc > 1) {
-        filename = argv[1];
+int main(){
+    if (!loadDelimiters("table1.table") || !loadReserved("table2.table")) {
+        return 1;
     }
-    else {
+    string filename;
+    while (true) {
         cout << "Enter source filename: ";
         if (!(cin >> filename)) {
             cerr << "No input file provided." << endl;
             return 1;
         }
+        if (tokenize(filename)) break;
+        cerr << "Unable to open source file '" << filename << "'. Please try again." << endl;
     }
-    tokenize(filename);
     parseProgram();
     writeQuadTable("table6.table");
     cout << "Compilation finished. IR written to table6.table" << endl;
