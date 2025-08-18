@@ -68,24 +68,48 @@ int asciiIndex(const string &s) {
 }
 
 int addInteger(const string &s) {
-    int idx = asciiIndex(s);
     if (integerTable.size() < 100) integerTable.resize(100);
-    integerTable[idx] = s;
+    int idx = asciiIndex(s);
+    int size = integerTable.size();
+    for (int i = 0; i < size; ++i) {
+        int probe = (idx + i) % size;
+        if (integerTable[probe].empty()) {
+            integerTable[probe] = s;
+            return probe;
+        }
+        if (integerTable[probe] == s) return probe;
+    }
     return idx;
 }
 
 int addReal(const string &s) {
-    int idx = asciiIndex(s);
     if (realTable.size() < 100) realTable.resize(100);
-    realTable[idx] = s;
+    int idx = asciiIndex(s);
+    int size = realTable.size();
+    for (int i = 0; i < size; ++i) {
+        int probe = (idx + i) % size;
+        if (realTable[probe].empty()) {
+            realTable[probe] = s;
+            return probe;
+        }
+        if (realTable[probe] == s) return probe;
+    }
     return idx;
 }
 
 // Store identifiers at ASCII index derived from sum of characters modulo 100
 int addIdentifier(const string &s) {
-    int idx = asciiIndex(s);
     if (identifierTable.size() < 100) identifierTable.resize(100);
-    identifierTable[idx] = s;
+    int idx = asciiIndex(s);
+    int size = identifierTable.size();
+    for (int i = 0; i < size; ++i) {
+        int probe = (idx + i) % size;
+        if (identifierTable[probe].empty()) {
+            identifierTable[probe] = s;
+            return probe;
+        }
+        if (identifierTable[probe] == s) return probe;
+    }
     return idx;
 }
 
