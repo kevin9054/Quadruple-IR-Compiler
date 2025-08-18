@@ -355,6 +355,18 @@ void parseVariable(const vector<Token>& line,int i) {
     }
 }
 
+void parseProgramStart(const vector<Token>& line,int i){
+    if (i<line.size() && line[i].type==Identifier){
+        addQuad("PROGRAM","","",line[i].lexeme,"PROGRAM "+line[i].lexeme);
+    }
+}
+
+void parseSubroutine(const vector<Token>& line,int i){
+    if (i<line.size() && line[i].type==Identifier){
+        addQuad("SUBROUTINE","","",line[i].lexeme,"SUBROUTINE "+line[i].lexeme);
+    }
+}
+
 void parseDimension(const vector<Token>& line,int i){
     if (i<line.size() && line[i].type==Reserved){
         string type=line[i].lexeme;
@@ -373,6 +385,23 @@ void parseDimension(const vector<Token>& line,int i){
 void parseGoto(const vector<Token>& line,int i){
     if (i<line.size() && line[i].type==Identifier)
         addQuad("GTO","","",line[i].lexeme,"GTO "+line[i].lexeme);
+}
+
+void parseCall(const vector<Token>& line,int i){
+    if (i<line.size() && line[i].type==Identifier){
+        addQuad("CALL","","",line[i].lexeme,"CALL "+line[i].lexeme);
+        // Parameters are ignored for IR simplification
+    }
+}
+
+void parseIO(const string& op,const vector<Token>& line,int i){
+    while (i<line.size()){
+        if (line[i].type==Identifier)
+            addQuad(op,"","",line[i].lexeme,op+" "+line[i].lexeme);
+        ++i;
+        if (i<line.size() && line[i].lexeme==",") ++i;
+        else break;
+    }
 }
 
 void parseLabel(const vector<Token>& line,int i){
@@ -400,6 +429,12 @@ void parseStatement(const vector<Token>& line){
         else if (word=="LABEL") parseLabel(line,1);
         else if (word=="IF") parseIf(line,1);
         else if (word=="GTO") parseGoto(line,1);
+        else if (word=="PROGRAM") parseProgramStart(line,1);
+        else if (word=="SUBROUTINE") parseSubroutine(line,1);
+        else if (word=="CALL") parseCall(line,1);
+        else if (word=="INPUT") parseIO("INPUT",line,1);
+        else if (word=="OUTPUT") parseIO("OUTPUT",line,1);
+        else if (word=="ENS") addQuad("ENS","","","","ENS");
         else if (word=="ENP") addQuad("ENP","","","","ENP");
     }
     else if (line[0].type==Identifier){
@@ -447,19 +482,8 @@ void parseProgram() {
             ++i;
         }
         if (i >= line.size()) continue;
-        const Token &tok=line[i];
-        if (tok.type==Reserved){
-            const string &word=tok.lexeme;
-            if (word=="VARIABLE") parseVariable(line,i+1);
-            else if (word=="DIMENSION") parseDimension(line,i+1);
-            else if (word=="LABEL") parseLabel(line,i+1);
-            else if (word=="IF") parseIf(line,i+1);
-            else if (word=="GTO") parseGoto(line,i+1);
-            else if (word=="ENP") addQuad("ENP","","","","ENP");
-        }
-        else if (tok.type==Identifier) {
-            parseAssignment(line,i);
-        }
+        vector<Token> rest(line.begin()+i,line.end());
+        parseStatement(rest);
     }
 }
 
