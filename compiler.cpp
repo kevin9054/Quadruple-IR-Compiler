@@ -343,6 +343,26 @@ void parseLabel(const vector<Token>& line,int i){
     }
 }
 
+// forward declaration for recursive parsing
+void parseIf(const vector<Token>& line,int i);
+void parseStatement(const vector<Token>& line);
+
+void parseStatement(const vector<Token>& line){
+    if (line.empty()) return;
+    if (line[0].type==Reserved){
+        const string &word=line[0].lexeme;
+        if (word=="VARIABLE") parseVariable(line,1);
+        else if (word=="DIMENSION") parseDimension(line,1);
+        else if (word=="LABEL") parseLabel(line,1);
+        else if (word=="IF") parseIf(line,1);
+        else if (word=="GTO") parseGoto(line,1);
+        else if (word=="ENP") addQuad("ENP","","","","ENP");
+    }
+    else if (line[0].type==Identifier){
+        parseAssignment(line,0);
+    }
+}
+
 void parseIf(const vector<Token>& line,int i){
     string left=tokenValue(line[i]);
     string relop=line[i+1].lexeme;
@@ -351,15 +371,22 @@ void parseIf(const vector<Token>& line,int i){
     addQuad(relop,left,right,tempCond,tempCond+"="+left+" "+relop+" "+right);
     int pos=i+3;
     if (pos<line.size() && line[pos].lexeme=="THEN") ++pos;
-    if (pos<line.size() && line[pos].lexeme=="GTO") {
-        string trueLabel = line[pos+1].lexeme;
-        string elseLabel = newLabel();
-        addQuad("IF",tempCond,"",elseLabel,"IF "+tempCond+" == FALSE GO TO "+elseLabel);
-        addQuad("GTO","","",trueLabel,"GTO "+trueLabel);
-        addQuad("LABEL","","",elseLabel,elseLabel);
-        pos+=2;
-        if (pos<line.size() && line[pos].lexeme=="ELSE") ++pos;
-        if (pos<line.size() && line[pos].type==Identifier) parseAssignment(line,pos);
+    int elsePos=pos;
+    while (elsePos<line.size() && line[elsePos].lexeme!="ELSE") ++elsePos;
+    string falseLabel=newLabel();
+    string endLabel=newLabel();
+    addQuad("IF",tempCond,"",falseLabel,"IF "+tempCond+" == FALSE GO TO "+falseLabel);
+    vector<Token> thenPart(line.begin()+pos,line.begin()+elsePos);
+    parseStatement(thenPart);
+    if (elsePos<line.size()){
+        addQuad("GTO","","",endLabel,"GTO "+endLabel);
+        addQuad("LABEL","","",falseLabel,falseLabel);
+        vector<Token> elsePart(line.begin()+elsePos+1,line.end());
+        parseStatement(elsePart);
+        addQuad("LABEL","","",endLabel,endLabel);
+    }
+    else {
+        addQuad("LABEL","","",falseLabel,falseLabel);
     }
 }
 
