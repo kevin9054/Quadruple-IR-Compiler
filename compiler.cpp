@@ -60,26 +60,33 @@ void loadReserved(const string &file) {
     }
 }
 
+// compute sum of ASCII codes and map into table via modulo 100
+int asciiIndex(const string &s) {
+    int sum = 0;
+    for (unsigned char c : s) sum += c;
+    return sum % 100;
+}
+
 int addInteger(const string &s) {
-    auto it = find(integerTable.begin(), integerTable.end(), s);
-    if (it != integerTable.end()) return distance(integerTable.begin(), it) + 1;
-    integerTable.push_back(s);
-    return integerTable.size();
+    int idx = asciiIndex(s);
+    if (integerTable.size() < 100) integerTable.resize(100);
+    integerTable[idx] = s;
+    return idx;
 }
 
 int addReal(const string &s) {
-    auto it = find(realTable.begin(), realTable.end(), s);
-    if (it != realTable.end()) return distance(realTable.begin(), it) + 1;
-    realTable.push_back(s);
-    return realTable.size();
+    int idx = asciiIndex(s);
+    if (realTable.size() < 100) realTable.resize(100);
+    realTable[idx] = s;
+    return idx;
 }
 
-// Store identifiers at ASCII index of first character modulo 100
+// Store identifiers at ASCII index derived from sum of characters modulo 100
 int addIdentifier(const string &s) {
-    auto it = find(identifierTable.begin(), identifierTable.end(), s);
-    if (it != identifierTable.end()) return distance(identifierTable.begin(), it) + 1;
-    identifierTable.push_back(s);
-    return identifierTable.size();
+    int idx = asciiIndex(s);
+    if (identifierTable.size() < 100) identifierTable.resize(100);
+    identifierTable[idx] = s;
+    return idx;
 }
 
 void tokenize(const string &inputFile) {
