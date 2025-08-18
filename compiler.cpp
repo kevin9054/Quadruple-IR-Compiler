@@ -21,12 +21,28 @@ vector<string> integerTable;
 vector<string> realTable;
 vector<string> identifierTable;
 vector<vector<Token>> tokens;
+vector<string> sourceLines;
 
 // collect declared variables and labels for output ordering
 unordered_set<string> variableSet;
 vector<string> variableList;
 unordered_set<string> labelSet;
 vector<string> labelList;
+
+bool syntaxError = false;
+struct SyntaxErr { int line; string message; };
+vector<SyntaxErr> syntaxErrors;
+int currentLine = 0;
+void reportSyntaxError(const string &msg) {
+    syntaxError = true;
+    syntaxErrors.push_back({currentLine+1, msg});
+    cerr << "Syntax Error on line " << currentLine+1 << ": " << msg << endl;
+    if (currentLine > 0)
+        cerr << currentLine << ": " << sourceLines[currentLine-1] << endl;
+    cerr << currentLine+1 << ": " << sourceLines[currentLine] << endl;
+    if (currentLine+1 < sourceLines.size())
+        cerr << currentLine+2 << ": " << sourceLines[currentLine+1] << endl;
+}
 
 string toUpper(const string &str) {
     string lower = str;
@@ -127,9 +143,11 @@ bool tokenize(const string &inputFile) {
     ifstream in(inputFile);
     if (!in) return false;
     tokens.clear();
+    sourceLines.clear();
     string line;
     while (getline(in, line)) {
         if (!line.empty() && line.back()=='\r') line.pop_back();
+        sourceLines.push_back(line);
         vector<Token> lineTokens; int i = 0;
         while (i < line.size()) {
             char c = line[i];
@@ -242,6 +260,14 @@ string refToStr(const Ref &r) {
 
 void writeQuadTable(const string& file) {
     ofstream out(file);
+    for (const auto &e : syntaxErrors) {
+        out << "Error line " << e.line << ": " << e.message << "\n";
+        if (e.line > 1)
+            out << e.line-1 << ": " << sourceLines[e.line-2] << "\n";
+        out << e.line << ": " << sourceLines[e.line-1] << "\n";
+        if (e.line < sourceLines.size())
+            out << e.line+1 << ": " << sourceLines[e.line] << "\n";
+    }
     int idx=1;
     Ref empty;
     for (const auto &v : variableList){
@@ -310,10 +336,18 @@ string parseTerm(const vector<Token>& line,int &i) {
 
 // Parse factors and handle exponentiation
 string parseFactor(const vector<Token>& line,int &i) {
+    if (i>=line.size()) {
+        reportSyntaxError("Unexpected end of expression");
+        return "";
+    }
     string left = tokenValue(line[i]);
     ++i;
     if (i<line.size() && line[i].lexeme=="^") {
         ++i;
+        if (i>=line.size()) {
+            reportSyntaxError("Missing right operand for '^'");
+            return left;
+        }
         string right = parseFactor(line,i);
         string temp = newTemp();
         addQuad("^",left,right,temp,temp+"="+left+"^"+right);
@@ -324,13 +358,29 @@ string parseFactor(const vector<Token>& line,int &i) {
 
 void parseAssignment(const vector<Token>& line, int i) {
     if (i+1<line.size() && line[i+1].lexeme=="(") {
+        if (i+2>=line.size() || line[i+2].type!=Identifier) {
+            reportSyntaxError("Expected index after '(' in array assignment");
+            return;
+        }
         string arrayName=line[i].lexeme;
         string index=line[i+2].lexeme;
+        if (i+3>=line.size() || line[i+3].lexeme!=")") {
+            reportSyntaxError("Missing ')' in array assignment");
+            return;
+        }
+        if (i+4>=line.size() || line[i+4].lexeme!="=") {
+            reportSyntaxError("Expected '=' in array assignment");
+            return;
+        }
         int pos=i+5;
         string value=parseExpression(line,pos);
         addQuad("=",value,index,arrayName,arrayName+"("+index+")="+value);
     }
     else {
+        if (i+1>=line.size() || line[i+1].lexeme!="=") {
+            reportSyntaxError("Expected '=' in assignment");
+            return;
+        }
         string lhs=line[i].lexeme;
         int pos=i+2;
         string value=parseExpression(line,pos);
@@ -341,56 +391,96 @@ void parseAssignment(const vector<Token>& line, int i) {
 void parseVariable(const vector<Token>& line,int i) {
     if (i<line.size() && line[i].type==Reserved){
         string type=line[i].lexeme;
+        if (i+1>=line.size() || line[i+1].lexeme != ":") {
+            reportSyntaxError("Expected ':' after type in VARIABLE declaration");
+            return;
+        }
         i+=2;
+        if (i>=line.size()) {
+            reportSyntaxError("Missing identifier in VARIABLE declaration");
+            return;
+        }
         while (i<line.size()) {
             if (line[i].type==Identifier) {
                 addVariable(line[i].lexeme,type);
                 if (variableSet.insert(line[i].lexeme).second)
                     variableList.push_back(line[i].lexeme);
+            } else {
+                reportSyntaxError("Expected identifier in VARIABLE declaration");
+                break;
             }
             ++i;
             if (i<line.size() && line[i].lexeme==",") ++i;
             else break;
         }
+    } else {
+        reportSyntaxError("VARIABLE declaration missing type");
     }
 }
 
 void parseProgramStart(const vector<Token>& line,int i){
     if (i<line.size() && line[i].type==Identifier){
         addQuad("PROGRAM","","",line[i].lexeme,"PROGRAM "+line[i].lexeme);
+    } else {
+        reportSyntaxError("PROGRAM missing program name");
     }
 }
 
 void parseSubroutine(const vector<Token>& line,int i){
     if (i<line.size() && line[i].type==Identifier){
         addQuad("SUBROUTINE","","",line[i].lexeme,"SUBROUTINE "+line[i].lexeme);
+    } else {
+        reportSyntaxError("SUBROUTINE missing name");
     }
 }
 
 void parseDimension(const vector<Token>& line,int i){
     if (i<line.size() && line[i].type==Reserved){
         string type=line[i].lexeme;
-        i+=2;
-        if (i<line.size() && line[i].type==Identifier){
-            string name=line[i].lexeme; i+=2;
-            if (variableSet.insert(name).second) variableList.push_back(name);
-            if (i<line.size() && line[i].type==Integer){
-                int size=stoi(line[i].lexeme);
-                addArray(name,type,size);
-            }
+        if (i+1>=line.size() || line[i+1].lexeme != ":") {
+            reportSyntaxError("Expected ':' after type in DIMENSION");
+            return;
         }
+        i+=2;
+        if (i>=line.size() || line[i].type!=Identifier){
+            reportSyntaxError("Expected array name in DIMENSION");
+            return;
+        }
+        string name=line[i].lexeme; i++;
+        if (i>=line.size() || line[i].lexeme!="(") {
+            reportSyntaxError("Expected '(' after array name in DIMENSION");
+            return;
+        }
+        i++;
+        if (i>=line.size() || line[i].type!=Integer){
+            reportSyntaxError("Expected size in DIMENSION");
+            return;
+        }
+        int size=stoi(line[i].lexeme); i++;
+        if (i>=line.size() || line[i].lexeme!=")") {
+            reportSyntaxError("Expected ')' after size in DIMENSION");
+            return;
+        }
+        if (variableSet.insert(name).second) variableList.push_back(name);
+        addArray(name,type,size);
+    } else {
+        reportSyntaxError("DIMENSION missing type");
     }
 }
 
 void parseGoto(const vector<Token>& line,int i){
     if (i<line.size() && line[i].type==Identifier)
         addQuad("GTO","","",line[i].lexeme,"GTO "+line[i].lexeme);
+    else
+        reportSyntaxError("GTO missing label");
 }
 
 void parseCall(const vector<Token>& line,int i){
     if (i<line.size() && line[i].type==Identifier){
         addQuad("CALL","","",line[i].lexeme,"CALL "+line[i].lexeme);
         // Parameters are ignored for IR simplification
+    } else {
+        reportSyntaxError("CALL missing subroutine name");
     }
 }
 
@@ -398,6 +488,8 @@ void parseIO(const string& op,const vector<Token>& line,int i){
     while (i<line.size()){
         if (line[i].type==Identifier)
             addQuad(op,"","",line[i].lexeme,op+" "+line[i].lexeme);
+        else
+            reportSyntaxError(op+" expects identifier");
         ++i;
         if (i<line.size() && line[i].lexeme==",") ++i;
         else break;
@@ -409,6 +501,9 @@ void parseLabel(const vector<Token>& line,int i){
         if (line[i].type==Identifier){
             if (labelSet.insert(line[i].lexeme).second)
                 labelList.push_back(line[i].lexeme);
+        } else {
+            reportSyntaxError("LABEL expects identifier");
+            break;
         }
         ++i;
         if (i<line.size() && line[i].lexeme==",") ++i;
@@ -436,20 +531,32 @@ void parseStatement(const vector<Token>& line){
         else if (word=="OUTPUT") parseIO("OUTPUT",line,1);
         else if (word=="ENS") addQuad("ENS","","","","ENS");
         else if (word=="ENP") addQuad("ENP","","","","ENP");
+        else reportSyntaxError("Unknown reserved word '"+word+"'");
     }
     else if (line[0].type==Identifier){
         parseAssignment(line,0);
     }
+    else {
+        reportSyntaxError("Unrecognized statement");
+    }
 }
 
 void parseIf(const vector<Token>& line,int i){
+    if (i+2>=line.size()) {
+        reportSyntaxError("Incomplete IF condition");
+        return;
+    }
     string left=tokenValue(line[i]);
     string relop=line[i+1].lexeme;
     string right=tokenValue(line[i+2]);
     string tempCond=newTemp();
     addQuad(relop,left,right,tempCond,tempCond+"="+left+" "+relop+" "+right);
     int pos=i+3;
-    if (pos<line.size() && line[pos].lexeme=="THEN") ++pos;
+    if (pos>=line.size() || line[pos].lexeme!="THEN") {
+        reportSyntaxError("IF missing THEN");
+        return;
+    }
+    ++pos;
     int elsePos=pos;
     while (elsePos<line.size() && line[elsePos].lexeme!="ELSE") ++elsePos;
     string falseLabel=newLabel();
@@ -473,7 +580,9 @@ void parseIf(const vector<Token>& line,int i){
 }
 
 void parseProgram() {
-    for (const auto &line : tokens){
+    for (size_t lineNum = 0; lineNum < tokens.size(); ++lineNum){
+        currentLine = lineNum;
+        const auto &line = tokens[lineNum];
         if (line.empty()) continue;
         int i=0;
         if (line[i].type==Identifier && line.size()>1 && line[1].type==Reserved) {
@@ -503,6 +612,9 @@ int main(){
     }
     parseProgram();
     writeQuadTable("table6.table");
-    cout << "Compilation finished. IR written to table6.table" << endl;
+    if (syntaxError)
+        cerr << "Compilation finished with syntax errors." << endl;
+    else
+        cout << "Compilation finished. IR written to table6.table" << endl;
     return 0;
 }
