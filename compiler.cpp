@@ -340,8 +340,24 @@ string parseFactor(const vector<Token>& line,int &i) {
         reportSyntaxError("Unexpected end of expression");
         return "";
     }
-    string left = tokenValue(line[i]);
-    ++i;
+
+    string left;
+
+    // Handle parenthesized subexpressions
+    if (line[i].lexeme == "(") {
+        ++i; // consume '('
+        left = parseExpression(line,i);
+        if (i>=line.size() || line[i].lexeme != ")") {
+            reportSyntaxError("Missing ')' in expression");
+        } else {
+            ++i; // consume ')'
+        }
+    } else {
+        left = tokenValue(line[i]);
+        ++i;
+    }
+
+    // Handle exponentiation with right associativity
     if (i<line.size() && line[i].lexeme=="^") {
         ++i;
         if (i>=line.size()) {
