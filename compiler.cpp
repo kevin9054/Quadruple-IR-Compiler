@@ -277,15 +277,46 @@ void writeQuadTable(const string& file) {
 }
 
 
+string parseFactor(const vector<Token>& line,int &i);
+string parseTerm(const vector<Token>& line,int &i);
+
+// Parse expressions with + and - operators
 string parseExpression(const vector<Token>& line,int &i) {
+    string left = parseTerm(line,i);
+    while (i<line.size() && (line[i].lexeme=="+" || line[i].lexeme=="-")) {
+        string op = line[i].lexeme;
+        ++i;
+        string right = parseTerm(line,i);
+        string temp = newTemp();
+        addQuad(op,left,right,temp,temp+"="+left+op+right);
+        left = temp;
+    }
+    return left;
+}
+
+// Parse terms with * and / operators
+string parseTerm(const vector<Token>& line,int &i) {
+    string left = parseFactor(line,i);
+    while (i<line.size() && (line[i].lexeme=="*" || line[i].lexeme=="/")) {
+        string op = line[i].lexeme;
+        ++i;
+        string right = parseFactor(line,i);
+        string temp = newTemp();
+        addQuad(op,left,right,temp,temp+"="+left+op+right);
+        left = temp;
+    }
+    return left;
+}
+
+// Parse factors and handle exponentiation
+string parseFactor(const vector<Token>& line,int &i) {
     string left = tokenValue(line[i]);
     ++i;
-    if (i<line.size() && line[i].lexeme == "+") {
+    if (i<line.size() && line[i].lexeme=="^") {
         ++i;
-        string right = tokenValue(line[i]);
-        ++i;
+        string right = parseFactor(line,i);
         string temp = newTemp();
-        addQuad("+", left, right, temp, temp + "="+ left + "+" + right);
+        addQuad("^",left,right,temp,temp+"="+left+"^"+right);
         return temp;
     }
     return left;
