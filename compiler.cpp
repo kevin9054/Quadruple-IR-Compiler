@@ -22,6 +22,12 @@ vector<string> realTable;
 vector<string> identifierTable;
 vector<vector<Token>> tokens;
 
+// collect declared variables and labels for output ordering
+unordered_set<string> variableSet;
+vector<string> variableList;
+unordered_set<string> labelSet;
+vector<string> labelList;
+
 static string toUpper(const string &s) {
     string r = s;
     for (char &c : r) c = toupper(static_cast<unsigned char>(c));
@@ -128,7 +134,11 @@ int tempCount=0;
 int labelCount=0;
 
 static string newTemp(){ return "T" + to_string(++tempCount); }
-static string newLabel(){ string lbl="L" + to_string(++labelCount); addIdentifier(lbl); return lbl; }
+static string newLabel(){
+    string lbl="L" + to_string(++labelCount);
+    addIdentifier(lbl);
+    return lbl;
+}
 
 static bool isIntegerStr(const string &s){ return !s.empty() && all_of(s.begin(),s.end(),::isdigit); }
 static bool isRealStr(const string &s){ return s.find('.')!=string::npos && all_of(s.begin(),s.end(),[](char c){return isdigit(c) || c=='.';}); }
@@ -156,6 +166,21 @@ static string refToStr(const Ref &r){
 
 static void writeQuadTable(const string& file){
     ofstream out(file); int idx=1;
+    Ref empty;
+    for (const auto &v : variableList){
+        Ref r = toRef(v);
+        out << idx++ << " (" << refToStr(r) << ", "
+            << refToStr(empty) << ", "
+            << refToStr(empty) << ", "
+            << refToStr(empty) << ") " << v << "\n";
+    }
+    for (const auto &l : labelList){
+        Ref r = toRef(l);
+        out << idx++ << " (" << refToStr(r) << ", "
+            << refToStr(empty) << ", "
+            << refToStr(empty) << ", "
+            << refToStr(empty) << ") " << l << "\n";
+    }
     for (auto &q:quads){
         out << idx++ << " ("<<refToStr(q.op)<<", "
             << refToStr(q.arg1)<<", "
@@ -195,7 +220,11 @@ static void parseVariable(const vector<Token>& line,size_t i){
     if (i<line.size() && line[i].type==Reserved){
         string type=line[i].lexeme; i+=2;
         while (i<line.size()){
-            if (line[i].type==Identifier) addVariable(line[i].lexeme,type);
+            if (line[i].type==Identifier) {
+                addVariable(line[i].lexeme,type);
+                if (variableSet.insert(line[i].lexeme).second)
+                    variableList.push_back(line[i].lexeme);
+            }
             ++i; if (i<line.size() && line[i].lexeme==",") ++i; else break;
         }
     }
@@ -206,6 +235,7 @@ static void parseDimension(const vector<Token>& line,size_t i){
         string type=line[i].lexeme; i+=2;
         if (i<line.size() && line[i].type==Identifier){
             string name=line[i].lexeme; i+=2;
+            if (variableSet.insert(name).second) variableList.push_back(name);
             if (i<line.size() && line[i].type==Integer){
                 int size=stoi(line[i].lexeme); addArray(name,type,size);
             }
@@ -216,6 +246,17 @@ static void parseDimension(const vector<Token>& line,size_t i){
 static void parseGoto(const vector<Token>& line,size_t i){
     if (i<line.size() && line[i].type==Identifier)
         addQuad("GTO","","",line[i].lexeme,"GTO "+line[i].lexeme);
+}
+
+static void parseLabel(const vector<Token>& line,size_t i){
+    while (i<line.size()){
+        if (line[i].type==Identifier){
+            if (labelSet.insert(line[i].lexeme).second)
+                labelList.push_back(line[i].lexeme);
+        }
+        ++i;
+        if (i<line.size() && line[i].lexeme==",") ++i; else break;
+    }
 }
 
 static void parseIf(const vector<Token>& line,size_t i){
@@ -245,6 +286,7 @@ static void parseProgram(){
         size_t i=0;
         if (line[i].type==Identifier && line.size()>1 && line[1].type==Reserved){
             addQuad("LABEL","","",line[i].lexeme,line[i].lexeme);
+            if (labelSet.insert(line[i].lexeme).second) labelList.push_back(line[i].lexeme);
             ++i;
         }
         if (i>=line.size()) continue;
@@ -253,6 +295,7 @@ static void parseProgram(){
             const string &word=tok.lexeme;
             if (word=="VARIABLE") parseVariable(line,i+1);
             else if (word=="DIMENSION") parseDimension(line,i+1);
+            else if (word=="LABEL") parseLabel(line,i+1);
             else if (word=="IF") parseIf(line,i+1);
             else if (word=="GTO") parseGoto(line,i+1);
             else if (word=="ENP") addQuad("ENP","","","","ENP");
