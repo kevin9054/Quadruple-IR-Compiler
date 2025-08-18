@@ -425,14 +425,20 @@ ExprResult parseFactor(const vector<Token>& line,int &i) {
         } else {
             ++i; // consume ')'
         }
-    } else {
+    }
+    else {
         left.name = tokenValue(line[i]);
         if (line[i].type==Real) left.type="REAL";
         else if (line[i].type==Integer) left.type="INTEGER";
         else if (line[i].type==Identifier) {
             SymbolInfo info;
-            left.type = lookupSymbol(line[i].lexeme, info) ? info.type : "INTEGER";
-        } else left.type = "INTEGER";
+            if (!lookupSymbol(line[i].lexeme, info)) {
+                reportSyntaxError("Undeclared identifier '" + line[i].lexeme + "'");
+                return {"", "INTEGER"}; // or some error state
+            }
+            left.type = info.type;
+        }
+        else left.type = "INTEGER";
         ++i;
     }
 
