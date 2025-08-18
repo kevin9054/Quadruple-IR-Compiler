@@ -161,7 +161,7 @@ static void addQuad(const string& op,const string& a1,const string& a2,const str
 
 static string refToStr(const Ref &r){
     if (r.table==0 && r.index==0) return "";
-    return "("+to_string(r.table)+", "+to_string(r.index)+")";
+    return "("+to_string(r.table)+","+to_string(r.index)+")";
 }
 
 static void writeQuadTable(const string& file){
@@ -169,23 +169,28 @@ static void writeQuadTable(const string& file){
     Ref empty;
     for (const auto &v : variableList){
         Ref r = toRef(v);
-        out << idx++ << " (" << refToStr(r) << ", "
-            << refToStr(empty) << ", "
-            << refToStr(empty) << ", "
-            << refToStr(empty) << ") " << v << "\n";
+        out << idx++ << "\t(" << refToStr(r) << "," << "     "
+            << refToStr(empty) << "," << "     "
+            << refToStr(empty) << "," << "     "
+            << refToStr(empty) << ")\t" << v << "\n";
     }
     for (const auto &l : labelList){
         Ref r = toRef(l);
-        out << idx++ << " (" << refToStr(r) << ", "
-            << refToStr(empty) << ", "
-            << refToStr(empty) << ", "
-            << refToStr(empty) << ") " << l << "\n";
+        out << idx++ << "\t(" << refToStr(r) << "," << "     "
+            << refToStr(empty) << "," << "     "
+            << refToStr(empty) << "," << "     "
+            << refToStr(empty) << ")\t" << l << "\n";
     }
-    for (auto &q:quads){
-        out << idx++ << " ("<<refToStr(q.op)<<", "
-            << refToStr(q.arg1)<<", "
-            << refToStr(q.arg2)<<", "
-            << refToStr(q.result)<<") "<<q.comment<<"\n";
+    for (auto &q:quads) {
+        out << idx++ << "\t("<<refToStr(q.op);
+        if (refToStr(q.op).size() == 0) out << "     ";
+        out << "," <<refToStr(q.arg1);
+        if (refToStr(q.arg1).size() == 0) out << "     ";
+        out << "," <<refToStr(q.arg2);
+        if (refToStr(q.arg2).size() == 0) out << "     ";
+        out << "," <<refToStr(q.result);
+        if (refToStr(q.result).size() == 0) out << "     ";
+        out <<")\t"<<q.comment<<"\n";
     }
 }
 
@@ -324,4 +329,3 @@ int main(int argc, char* argv[]){
     cout << "Compilation finished. IR written to table6.table" << endl;
     return 0;
 }
-
